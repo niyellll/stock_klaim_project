@@ -90,14 +90,13 @@ select:disabled {
 }
 
 .login-brand,
-.brand-block {
+.topbar-brand {
   align-items: center;
   display: flex;
   gap: 12px;
 }
 
 .login-brand span,
-.brand-block span,
 .topbar span {
   color: var(--muted);
   display: block;
@@ -111,12 +110,6 @@ select:disabled {
   font-size: 24px;
   line-height: 1.05;
   margin: 2px 0 0;
-}
-
-.brand-block strong {
-  display: block;
-  font-size: 17px;
-  margin-top: 2px;
 }
 
 .brand-logo {
@@ -184,24 +177,8 @@ select:focus {
 .app-layout {
   background: var(--bg);
   color: var(--text);
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  display: block;
   min-height: 100vh;
-}
-
-.sidebar {
-  background: var(--panel);
-  border-right: 1px solid var(--line);
-  min-height: 100vh;
-  padding: 16px 14px;
-  position: sticky;
-  top: 0;
-}
-
-.sidebar nav {
-  display: grid;
-  gap: 6px;
-  margin-top: 18px;
 }
 
 .nav-item,
@@ -228,10 +205,12 @@ select:focus {
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
+  flex: 0 0 auto;
   font-size: 13px;
   justify-content: flex-start;
-  padding: 9px 10px;
-  width: 100%;
+  padding: 8px 10px;
+  white-space: nowrap;
+  width: auto;
 }
 
 .nav-item:hover,
@@ -248,17 +227,16 @@ select:focus {
 
 .workspace {
   min-width: 0;
+  width: 100%;
 }
 
 .topbar {
-  align-items: center;
   backdrop-filter: blur(12px);
   background: rgba(238, 243, 248, 0.92);
   border-bottom: 1px solid var(--line);
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 12px 18px;
+  display: grid;
+  gap: 10px;
+  padding: 10px 14px;
   position: sticky;
   top: 0;
   z-index: 20;
@@ -270,6 +248,32 @@ select:focus {
 
 .topbar h1 {
   font-size: 20px;
+}
+
+.topbar-main {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.topbar-brand {
+  min-width: 220px;
+}
+
+.topbar-brand .brand-logo {
+  height: 42px;
+  width: 42px;
+}
+
+.top-nav {
+  display: flex;
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 
 .topbar-actions,
@@ -715,7 +719,6 @@ select:focus {
 }
 
 @media print {
-  .sidebar,
   .topbar,
   .filter-band,
   .tabs-band,
@@ -751,30 +754,6 @@ select:focus {
 }
 
 @media (max-width: 900px) {
-  .app-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .sidebar {
-    bottom: 0;
-    left: 0;
-    max-width: 290px;
-    position: fixed;
-    top: 0;
-    transform: translateX(-102%);
-    transition: transform 0.2s ease;
-    width: 80vw;
-    z-index: 40;
-  }
-
-  .sidebar.open {
-    transform: translateX(0);
-  }
-
-  .topbar {
-    align-items: flex-start;
-  }
-
   .topbar-actions {
     justify-content: flex-end;
   }
@@ -801,8 +780,16 @@ select:focus {
   }
 
   .topbar {
-    flex-wrap: wrap;
     padding: 10px;
+  }
+
+  .topbar-main {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .topbar-brand {
+    min-width: 0;
   }
 
   .topbar h1 {

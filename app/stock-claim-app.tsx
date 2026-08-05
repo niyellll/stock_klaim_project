@@ -17,7 +17,6 @@ import {
   ListChecks,
   Lock,
   LogOut,
-  Menu,
   Moon,
   Package,
   PackagePlus,
@@ -1879,7 +1878,6 @@ export function StockClaimApp() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [menu, setMenu] = useState<MenuKey>("dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [filters, setFilters] = useState<FiltersState>({
     ...initialFilters,
@@ -4033,48 +4031,14 @@ export function StockClaimApp() {
 
   return (
     <main className={`app-layout theme-${theme}`}>
-      <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
-        <div className="brand-block">
-          <BrandLogo />
-          <div>
-            <span>PT. Berdikari Berkah Mulia</span>
-            <strong>Stok dan Klaim</strong>
-          </div>
-        </div>
-        <nav>
-          {menuItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                className={menu === item.key ? "nav-item active" : "nav-item"}
-                type="button"
-                onClick={() => {
-                  setMenu(item.key);
-                  setSidebarOpen(false);
-                }}
-              >
-                <Icon size={16} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-      <section className="workspace">
-        <header className="topbar">
-          <button
-            className="icon-only"
-            type="button"
-            onClick={() => setSidebarOpen((value) => !value)}
-            aria-label="Menu"
-            title="Menu"
-          >
-            <Menu size={18} />
-          </button>
-          <div>
-            <span>{menuItems.find((item) => item.key === menu)?.label}</span>
-            <h1>Stok dan Klaim</h1>
+      <header className="topbar">
+        <div className="topbar-main">
+          <div className="topbar-brand">
+            <BrandLogo />
+            <div>
+              <span>PT. Berdikari Berkah Mulia</span>
+              <h1>Stok dan Klaim</h1>
+            </div>
           </div>
           <div className="topbar-actions">
             <Badge tone={session.role === "admin" ? "danger" : "info"}>
@@ -4094,7 +4058,25 @@ export function StockClaimApp() {
               Logout
             </button>
           </div>
-        </header>
+        </div>
+        <nav className="top-nav" aria-label="Menu utama">
+          {menuItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                className={menu === item.key ? "nav-item active" : "nav-item"}
+                type="button"
+                onClick={() => setMenu(item.key)}
+              >
+                <Icon size={16} />
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      </header>
+      <section className="workspace">
         <div className="workspace-body">{renderContent()}</div>
       </section>
     </main>
