@@ -49,6 +49,14 @@ npm run build
 npm test
 ```
 
+## Vercel
+
+Project ini memakai Vite React SPA untuk Vercel.
+
+- Build command: `npm run build`
+- Output directory: `dist`
+- Rewrite: semua route diarahkan ke `index.html`
+
 ## Database
 
 Skema database mandiri ada di `db/schema.ts` dengan tabel:
