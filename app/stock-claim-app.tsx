@@ -1834,6 +1834,16 @@ function Badge({ tone, children }: { tone: string; children: ReactNode }) {
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+function BrandLogo() {
+  return (
+    <span
+      className="brand-logo"
+      role="img"
+      aria-label="Logo PT. Berdikari Berkah Mulia"
+    />
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -3960,7 +3970,7 @@ export function StockClaimApp() {
   if (!loaded) {
     return (
       <main className="loading-screen">
-        <div className="brand-mark">BBM</div>
+        <BrandLogo />
         <span>Memuat Stok dan Klaim...</span>
       </main>
     );
@@ -3971,7 +3981,7 @@ export function StockClaimApp() {
       <main className={`login-screen theme-${theme}`}>
         <section className="login-panel">
           <div className="login-brand">
-            <div className="brand-mark">BBM</div>
+            <BrandLogo />
             <div>
               <span>PT. Berdikari Berkah Mulia</span>
               <h1>Stok dan Klaim</h1>
@@ -4025,7 +4035,7 @@ export function StockClaimApp() {
     <main className={`app-layout theme-${theme}`}>
       <aside className={sidebarOpen ? "sidebar open" : "sidebar"}>
         <div className="brand-block">
-          <div className="brand-mark">BBM</div>
+          <BrandLogo />
           <div>
             <span>PT. Berdikari Berkah Mulia</span>
             <strong>Stok dan Klaim</strong>

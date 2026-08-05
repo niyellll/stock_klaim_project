@@ -6,8 +6,8 @@ export const metadata: Metadata = {
   description:
     "Program web terpisah untuk stok barang dan monitoring klaim PT. Berdikari Berkah Mulia.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/icon.png",
+    shortcut: "/icon.png",
   },
 };
 
