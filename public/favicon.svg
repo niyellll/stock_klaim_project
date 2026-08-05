@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="BBM">
+  <rect width="64" height="64" rx="10" fill="#104c96"/>
+  <path d="M37 0h27v64H28L37 0z" fill="#c8212d"/>
+  <text x="8" y="39" fill="#fff" font-family="Arial, sans-serif" font-size="16" font-weight="800" letter-spacing="0">BBM</text>
+</svg>
