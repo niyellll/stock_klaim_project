@@ -1875,8 +1875,8 @@ export function StockClaimApp() {
   const [loaded, setLoaded] = useState(false);
   const [db, setDb] = useState<DbState>(() => seedDb());
   const [session, setSession] = useState<SessionUser | null>(null);
-  const [loginUsername, setLoginUsername] = useState("admin321");
-  const [loginPassword, setLoginPassword] = useState("654321");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [menu, setMenu] = useState<MenuKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -3993,7 +3993,7 @@ export function StockClaimApp() {
               <input
                 value={loginUsername}
                 onChange={(event) => setLoginUsername(event.target.value)}
-                autoComplete="username"
+                autoComplete="off"
               />
             </label>
             <label>
@@ -4002,7 +4002,7 @@ export function StockClaimApp() {
                 type="password"
                 value={loginPassword}
                 onChange={(event) => setLoginPassword(event.target.value)}
-                autoComplete="current-password"
+                autoComplete="new-password"
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     handleLogin();
