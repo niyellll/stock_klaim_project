@@ -9,7 +9,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "start": "vite preview --host 127.0.0.1",
-    "test": "npm run build && node --test tests/static-build.test.mjs",
+    "test": "npm run build && node --test tests/static-build.test.mjs tests/claim-template-upload-session.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

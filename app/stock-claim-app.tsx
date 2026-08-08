@@ -194,9 +194,11 @@ interface MonitoringKlaim {
   jenisKlaim: string;
   noKlaim: string;
   noFakturPajak: string;
+  namaCustomer: string;
   tanggalFakturPajak: string;
   dpp: number;
   ppn: number;
+  total: number;
   status: "Draft" | "Diajukan" | "Diproses" | "Selesai" | "Ditolak";
   keterangan: string;
   attachment: string;
@@ -311,6 +313,7 @@ interface UploadDefinition {
     | "stockSaldoAwal"
     | "monitoringKlaim";
   requiredHeaders: string[];
+  headerAliases?: Partial<Record<string, string[]>>;
   sample: Array<string | number>;
   mapRow: (
     row: Record<string, unknown>,
@@ -336,9 +339,18 @@ interface SessionUser {
   token: string;
 }
 
+type ActiveSessionInfo = {
+  token: string;
+  touchedAt: number;
+  app: string;
+};
+
 const DB_KEY = "stok-klaim-bbm-db-v1";
 const SESSION_KEY = "stok-klaim-bbm-session-v1";
 const ACTIVE_SESSION_KEY = "stok-klaim-bbm-active-sessions-v1";
+const APP_SESSION_SCOPE = "stock-claim";
+const ACTIVE_SESSION_TTL_MS = 2 * 60 * 1000;
+const ACTIVE_SESSION_HEARTBEAT_MS = 25 * 1000;
 
 const currentYear = new Date().getFullYear().toString();
 
@@ -359,6 +371,65 @@ const claimStatuses: MonitoringKlaim["status"][] = [
   "Diproses",
   "Selesai",
   "Ditolak",
+];
+
+const defaultClaimTypes: MasterJenisKlaim[] = [
+  {
+    id: "jkl_001",
+    jenisKlaim: "Selisih Harga",
+    defaultDivisi: "Purchasing",
+    catatan: "Klaim atas DPP atau harga beli.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_002",
+    jenisKlaim: "Barang Rusak",
+    defaultDivisi: "Gudang",
+    catatan: "Klaim fisik barang dan dokumen pendukung.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_promosi",
+    jenisKlaim: "Promosi",
+    defaultDivisi: "Marketing",
+    catatan: "Klaim biaya atau program promosi.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_jasa_manajemen",
+    jenisKlaim: "Jasa Manajemen",
+    defaultDivisi: "Finance",
+    catatan: "Klaim biaya jasa manajemen.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_reimbursement",
+    jenisKlaim: "Reimbursement",
+    defaultDivisi: "Finance",
+    catatan: "Klaim penggantian biaya.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_klaim_barang",
+    jenisKlaim: "Klaim Barang",
+    defaultDivisi: "Gudang",
+    catatan: "Klaim terkait fisik atau jumlah barang.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_sub_dist_gaji",
+    jenisKlaim: "Sub Dist Gaji",
+    defaultDivisi: "Finance",
+    catatan: "Klaim sub distributor terkait gaji.",
+    status: "aktif",
+  },
+  {
+    id: "jkl_lainnya",
+    jenisKlaim: "Lainnya",
+    defaultDivisi: "",
+    catatan: "Pilih ini lalu ketik jenis klaim manual.",
+    status: "aktif",
+  },
 ];
 
 function createId(prefix: string) {
@@ -429,6 +500,16 @@ function getCell(row: Record<string, unknown>, header: string) {
   const wanted = normalizeHeader(header);
   const found = Object.keys(row).find((key) => normalizeHeader(key) === wanted);
   return normalizeExcelText(found ? row[found] : "");
+}
+
+function getCellAny(row: Record<string, unknown>, headers: string[]) {
+  for (const header of headers) {
+    const value = getCell(row, header);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function parseAmount(value: unknown) {
@@ -554,12 +635,101 @@ function writeStoredJson(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function getActiveSessions() {
-  return readStoredJson<Record<string, string>>(ACTIVE_SESSION_KEY, {});
+function sessionStorageKey(username: string) {
+  return `${APP_SESSION_SCOPE}:${username.trim().toLowerCase()}`;
 }
 
-function setActiveSessions(value: Record<string, string>) {
+function getActiveSessions(currentSession?: SessionUser | null) {
+  const raw = readStoredJson<Record<string, string | ActiveSessionInfo>>(
+    ACTIVE_SESSION_KEY,
+    {},
+  );
+  const now = Date.now();
+  const next: Record<string, ActiveSessionInfo> = {};
+  Object.entries(raw).forEach(([key, value]) => {
+    const info =
+      typeof value === "string"
+        ? { token: value, touchedAt: 0, app: APP_SESSION_SCOPE }
+        : value;
+    const matchesCurrent =
+      currentSession &&
+      info.token === currentSession.token &&
+      key === sessionStorageKey(currentSession.username);
+    if (
+      info.app === APP_SESSION_SCOPE &&
+      (matchesCurrent || (info.touchedAt > 0 && now - info.touchedAt < ACTIVE_SESSION_TTL_MS))
+    ) {
+      next[key] = info;
+    }
+  });
+  return next;
+}
+
+function setActiveSessions(value: Record<string, ActiveSessionInfo>) {
   writeStoredJson(ACTIVE_SESSION_KEY, value);
+}
+
+function touchActiveSession(session: SessionUser) {
+  const active = getActiveSessions(session);
+  active[sessionStorageKey(session.username)] = {
+    token: session.token,
+    touchedAt: Date.now(),
+    app: APP_SESSION_SCOPE,
+  };
+  setActiveSessions(active);
+}
+
+function releaseActiveSession(session: SessionUser) {
+  const active = getActiveSessions(session);
+  const key = sessionStorageKey(session.username);
+  if (active[key]?.token === session.token) {
+    delete active[key];
+    setActiveSessions(active);
+  }
+}
+
+function normalizeClaimTypeName(value: string) {
+  const key = normalizeHeader(value);
+  if (key === "REIMBUSTMENT" || key === "REIMBURSEMENT") return "Reimbursement";
+  if (key === "JASA MANAGEMENT" || key === "JASA MANAJEMEN") return "Jasa Manajemen";
+  if (key === "SUBDIST GAJI" || key === "SUB DIST GAJI") return "Sub Dist Gaji";
+  if (key === "KLAIM BARANG") return "Klaim Barang";
+  if (key === "PROMOSI") return "Promosi";
+  if (key === "LAIN LAIN" || key === "LAINNYA") return "Lainnya";
+  return value.trim();
+}
+
+function normalizeDefaultClaimTypes(rows: MasterJenisKlaim[] | undefined) {
+  const byName = new Map<string, MasterJenisKlaim>();
+  (rows ?? []).forEach((row) => {
+    const jenisKlaim = normalizeClaimTypeName(row.jenisKlaim);
+    if (!jenisKlaim) return;
+    byName.set(normalizeHeader(jenisKlaim), { ...row, jenisKlaim });
+  });
+  defaultClaimTypes.forEach((row) => {
+    const key = normalizeHeader(row.jenisKlaim);
+    if (!byName.has(key)) {
+      byName.set(key, row);
+    }
+  });
+  return Array.from(byName.values());
+}
+
+function normalizeClaimRows(rows: MonitoringKlaim[] | undefined) {
+  return (rows ?? []).map((row) => {
+    const dpp = Number(row.dpp) || 0;
+    const ppn = Number(row.ppn) || 0;
+    const total = Number(row.total) || dpp + ppn;
+    return {
+      ...row,
+      jenisKlaim: normalizeClaimTypeName(row.jenisKlaim),
+      namaCustomer: row.namaCustomer ?? "",
+      dpp,
+      ppn,
+      total,
+      attachment: row.attachment ?? "",
+    };
+  });
 }
 
 function normalizeDefaultUsers(users: AppUser[] | undefined) {
@@ -695,22 +865,7 @@ function seedDb(): DbState {
         status: "aktif",
       },
     ],
-    masterJenisKlaim: [
-      {
-        id: "jkl_001",
-        jenisKlaim: "Selisih Harga",
-        defaultDivisi: "Purchasing",
-        catatan: "Klaim atas DPP atau harga beli.",
-        status: "aktif",
-      },
-      {
-        id: "jkl_002",
-        jenisKlaim: "Barang Rusak",
-        defaultDivisi: "Gudang",
-        catatan: "Klaim fisik barang dan dokumen pendukung.",
-        status: "aktif",
-      },
-    ],
+    masterJenisKlaim: defaultClaimTypes,
     stockSaldoAwal: [
       {
         id: "saldo_001",
@@ -874,9 +1029,11 @@ function seedDb(): DbState {
         jenisKlaim: "Selisih Harga",
         noKlaim: "KLM-2603-001",
         noFakturPajak: "0100012600012345",
+        namaCustomer: "PT Berdikari Berkah Mulia",
         tanggalFakturPajak: "2026-02-28",
         dpp: 9000000,
         ppn: 990000,
+        total: 9990000,
         status: "Diproses",
         keterangan: "Menunggu konfirmasi vendor",
         attachment: "fp-0100012600012345.pdf, sj-1301430599.pdf",
@@ -927,6 +1084,14 @@ const uploadDefinitions: Record<UploadType, UploadDefinition> = {
       "GR NO",
       "CATATAN",
     ],
+    headerAliases: {
+      "NAMA PT": ["NAMA CUSTOMER", "CUSTOMER", "NAMA VENDOR", "VENDOR", "SUPPLIER"],
+      "TGL FP": ["TANGGAL FP", "TGL FAKTUR PAJAK", "TANGGAL FAKTUR PAJAK", "DATEOFTAX", "DATE OF TAX"],
+      "NO FP": ["NO FAKTUR PAJAK", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER", "DOCUMENT TAX NO", "DOCUMENT-TAX-NO"],
+      "SJ VENDOR": ["NO SJ VENDOR", "SURAT JALAN", "NO SURAT JALAN", "SJ", "DO INVOICE NO"],
+      "DPP": ["DPP REKAP", "DASAR PENGENAAN PAJAK", "NILAI DPP"],
+      "GR NO": ["GR", "NO GR", "GR NUMBER"],
+    },
     sample: [
       "1",
       "PT Berdikari Berkah Mulia",
@@ -939,14 +1104,14 @@ const uploadDefinitions: Record<UploadType, UploadDefinition> = {
     ],
     mapRow: (row, batchId, sourceRow): RekapBeli => ({
       id: createId("rekap"),
-      no: getCell(row, "NO"),
-      namaPt: getCell(row, "NAMA PT"),
-      tglFp: parseDateText(getCell(row, "TGL FP")),
-      noFp: normalizeExcelText(getCell(row, "NO FP")),
-      sjVendor: normalizeExcelText(getCell(row, "SJ VENDOR")),
-      dpp: parseAmount(getCell(row, "DPP")),
-      grNo: normalizeExcelText(getCell(row, "GR NO")),
-      catatan: getCell(row, "CATATAN"),
+      no: getCellAny(row, ["NO", "NOMOR"]),
+      namaPt: getCellAny(row, ["NAMA PT", "NAMA CUSTOMER", "CUSTOMER", "NAMA VENDOR", "VENDOR", "SUPPLIER"]),
+      tglFp: parseDateText(getCellAny(row, ["TGL FP", "TANGGAL FP", "TGL FAKTUR PAJAK", "TANGGAL FAKTUR PAJAK", "DATEOFTAX", "DATE OF TAX"])),
+      noFp: normalizeExcelText(getCellAny(row, ["NO FP", "NO FAKTUR PAJAK", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER", "DOCUMENT TAX NO", "DOCUMENT-TAX-NO"])),
+      sjVendor: normalizeExcelText(getCellAny(row, ["SJ VENDOR", "NO SJ VENDOR", "SURAT JALAN", "NO SURAT JALAN", "SJ", "DO INVOICE NO"])),
+      dpp: parseAmount(getCellAny(row, ["DPP", "DPP REKAP", "DASAR PENGENAAN PAJAK", "NILAI DPP"])),
+      grNo: normalizeExcelText(getCellAny(row, ["GR NO", "GR", "NO GR", "GR NUMBER"])),
+      catatan: getCellAny(row, ["CATATAN", "KETERANGAN", "NOTE"]),
       statusMatch: "Belum Match",
       batchId,
       sourceRow,
@@ -975,6 +1140,15 @@ const uploadDefinitions: Record<UploadType, UploadDefinition> = {
       "DPP",
       "NO FAKTUR PAJAK",
     ],
+    headerAliases: {
+      "GR NO": ["GR", "NO GR", "GR NUMBER"],
+      "TANGGAL TERIMA GUDANG": ["TGL TERIMA GUDANG", "TANGGAL GUDANG", "TGL GUDANG", "TANGGAL TERIMA"],
+      "SJ VENDOR": ["NO SJ VENDOR", "SURAT JALAN", "NO SURAT JALAN", "SJ", "DO INVOICE NO"],
+      "VENDOR": ["SUPPLIER", "NAMA VENDOR", "NAMA SUPPLIER"],
+      "QTY PURCHASE": ["QTY BELI", "QTY PEMBELIAN", "QTY"],
+      "QTY STOCK": ["QTY STOK", "QTY GUDANG"],
+      "NO FAKTUR PAJAK": ["NO FP", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER"],
+    },
     sample: [
       "1",
       "GR-SBY-260301",
@@ -995,22 +1169,22 @@ const uploadDefinitions: Record<UploadType, UploadDefinition> = {
     ],
     mapRow: (row, batchId, sourceRow): DetailBeli => ({
       id: createId("dbeli"),
-      no: getCell(row, "NO"),
-      grNo: normalizeExcelText(getCell(row, "GR NO")),
-      tanggalTerimaGudang: parseDateText(getCell(row, "TANGGAL TERIMA GUDANG")),
+      no: getCellAny(row, ["NO", "NOMOR"]),
+      grNo: normalizeExcelText(getCellAny(row, ["GR NO", "GR", "NO GR", "GR NUMBER"])),
+      tanggalTerimaGudang: parseDateText(getCellAny(row, ["TANGGAL TERIMA GUDANG", "TGL TERIMA GUDANG", "TANGGAL GUDANG", "TGL GUDANG", "TANGGAL TERIMA"])),
       gudang: getCell(row, "GUDANG"),
-      poNo: normalizeExcelText(getCell(row, "PO NO")),
-      sjVendor: normalizeExcelText(getCell(row, "SJ VENDOR")),
-      keterangan: getCell(row, "KETERANGAN"),
-      vendor: getCell(row, "VENDOR"),
-      kodeBarang: getCell(row, "KODE BARANG"),
-      namaBarang: getCell(row, "NAMA BARANG"),
-      qtyPurchase: parseAmount(getCell(row, "QTY PURCHASE")),
-      satuan: getCell(row, "SATUAN"),
-      qtyStock: parseAmount(getCell(row, "QTY STOCK")),
-      harga: parseAmount(getCell(row, "HARGA")),
-      dpp: parseAmount(getCell(row, "DPP")),
-      noFakturPajak: normalizeExcelText(getCell(row, "NO FAKTUR PAJAK")),
+      poNo: normalizeExcelText(getCellAny(row, ["PO NO", "NO PO", "PURCHASE ORDER"])),
+      sjVendor: normalizeExcelText(getCellAny(row, ["SJ VENDOR", "NO SJ VENDOR", "SURAT JALAN", "NO SURAT JALAN", "SJ", "DO INVOICE NO"])),
+      keterangan: getCellAny(row, ["KETERANGAN", "CATATAN", "NOTE"]),
+      vendor: getCellAny(row, ["VENDOR", "SUPPLIER", "NAMA VENDOR", "NAMA SUPPLIER"]),
+      kodeBarang: getCellAny(row, ["KODE BARANG", "KODE", "ITEM CODE"]),
+      namaBarang: getCellAny(row, ["NAMA BARANG", "BARANG", "ITEM NAME"]),
+      qtyPurchase: parseAmount(getCellAny(row, ["QTY PURCHASE", "QTY BELI", "QTY PEMBELIAN", "QTY"])),
+      satuan: getCellAny(row, ["SATUAN", "UOM"]),
+      qtyStock: parseAmount(getCellAny(row, ["QTY STOCK", "QTY STOK", "QTY GUDANG"])),
+      harga: parseAmount(getCellAny(row, ["HARGA", "PRICE"])),
+      dpp: parseAmount(getCellAny(row, ["DPP", "NILAI DPP"])),
+      noFakturPajak: normalizeExcelText(getCellAny(row, ["NO FAKTUR PAJAK", "NO FP", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER"])),
       statusMatch: "Belum Match",
       batchId,
       sourceRow,
@@ -1129,44 +1303,60 @@ const uploadDefinitions: Record<UploadType, UploadDefinition> = {
       "JENIS KLAIM",
       "NO KLAIM",
       "NO FAKTUR PAJAK",
+      "NAMA CUSTOMER",
       "TANGGAL FAKTUR PAJAK",
       "DPP",
       "PPN",
+      "TOTAL",
       "STATUS",
       "KETERANGAN",
       "ATTACHMENT",
     ],
+    headerAliases: {
+      "NO FAKTUR PAJAK": ["NO FP", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER"],
+      "NAMA CUSTOMER": ["CUSTOMER", "NAMA PELANGGAN", "NAMA PT"],
+      "TANGGAL FAKTUR PAJAK": ["TGL FAKTUR PAJAK", "TANGGAL FP", "TGL FP"],
+      "TOTAL": ["JUMLAH", "TOTAL KLAIM", "DPP PPN"],
+      "ATTACHMENT": ["ATTACH", "LAMPIRAN", "DOKUMEN"],
+    },
     sample: [
       "1",
       "2026-03-14",
       "Purchasing",
       "Rina",
-      "Selisih Harga",
+      "Promosi",
       "KLM-2603-001",
       "0100012600012345",
+      "PT Berdikari Berkah Mulia",
       "2026-02-28",
       9000000,
       990000,
+      9990000,
       "Diajukan",
       "Menunggu vendor",
       "fp.pdf, sj.pdf",
     ],
     mapRow: (row, batchId, sourceRow): MonitoringKlaim => {
       const rawStatus = getCell(row, "STATUS") as MonitoringKlaim["status"];
+      const dpp = parseAmount(getCell(row, "DPP"));
+      const ppn = parseAmount(getCell(row, "PPN"));
+      const total = parseAmount(getCellAny(row, ["TOTAL", "JUMLAH", "TOTAL KLAIM", "DPP PPN"])) || dpp + ppn;
       return {
         id: createId("klaim"),
         tanggalPengajuan: parseDateText(getCell(row, "TANGGAL PENGAJUAN")),
         divisi: getCell(row, "DIVISI"),
         yangMengajukan: getCell(row, "YANG MENGAJUKAN"),
-        jenisKlaim: getCell(row, "JENIS KLAIM"),
+        jenisKlaim: normalizeClaimTypeName(getCell(row, "JENIS KLAIM")),
         noKlaim: normalizeExcelText(getCell(row, "NO KLAIM")),
-        noFakturPajak: normalizeExcelText(getCell(row, "NO FAKTUR PAJAK")),
-        tanggalFakturPajak: parseDateText(getCell(row, "TANGGAL FAKTUR PAJAK")),
-        dpp: parseAmount(getCell(row, "DPP")),
-        ppn: parseAmount(getCell(row, "PPN")),
+        noFakturPajak: normalizeExcelText(getCellAny(row, ["NO FAKTUR PAJAK", "NO FP", "FAKTUR PAJAK", "TAX NO", "TAX NUMBER"])),
+        namaCustomer: getCellAny(row, ["NAMA CUSTOMER", "CUSTOMER", "NAMA PELANGGAN", "NAMA PT"]),
+        tanggalFakturPajak: parseDateText(getCellAny(row, ["TANGGAL FAKTUR PAJAK", "TGL FAKTUR PAJAK", "TANGGAL FP", "TGL FP"])),
+        dpp,
+        ppn,
+        total,
         status: claimStatuses.includes(rawStatus) ? rawStatus : "Draft",
-        keterangan: getCell(row, "KETERANGAN"),
-        attachment: getCell(row, "ATTACHMENT"),
+        keterangan: getCellAny(row, ["KETERANGAN", "CATATAN", "NOTE"]),
+        attachment: getCellAny(row, ["ATTACHMENT", "ATTACH", "LAMPIRAN", "DOKUMEN"]),
         batchId,
         sourceRow,
         validationStatus: "Valid",
@@ -1284,12 +1474,27 @@ const menuItems: Array<{
   { key: "admin", label: "Admin & Kontrol", icon: Settings },
 ];
 
-function hasHeader(headers: string[], required: string) {
-  const normalized = normalizeHeader(required);
-  return headers.some((header) => normalizeHeader(header) === normalized);
+function headerOptions(
+  required: string,
+  aliases?: Partial<Record<string, string[]>>,
+) {
+  return [required, ...(aliases?.[required] ?? [])];
 }
 
-function parseSheet(file: File) {
+function hasHeader(
+  headers: string[],
+  required: string,
+  aliases?: Partial<Record<string, string[]>>,
+) {
+  const normalized = normalizeHeader(required);
+  const options = new Set(
+    headerOptions(required, aliases).map((header) => normalizeHeader(header)),
+  );
+  options.add(normalized);
+  return headers.some((header) => options.has(normalizeHeader(header)));
+}
+
+function parseSheet(file: File, definition?: UploadDefinition) {
   return file.arrayBuffer().then((buffer) => {
     const workbook = XLSX.read(buffer, {
       type: "array",
@@ -1298,15 +1503,31 @@ function parseSheet(file: File) {
     });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    const matrix = XLSX.utils.sheet_to_json<Array<unknown>>(sheet, {
+      header: 1,
+      blankrows: true,
       defval: "",
       raw: false,
     });
+    const headerRowIndex = definition
+      ? matrix.reduce(
+          (best, row, index) => {
+            const headers = row.map(String);
+            const score = definition.requiredHeaders.filter((header) =>
+              hasHeader(headers, header, definition.headerAliases),
+            ).length;
+            return score > best.score ? { index, score } : best;
+          },
+          { index: 0, score: 0 },
+        ).index
+      : 0;
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+      defval: "",
+      raw: false,
+      range: headerRowIndex,
+    });
     const headers =
-      XLSX.utils.sheet_to_json<string[]>(sheet, {
-        header: 1,
-        blankrows: false,
-      })[0] ?? Object.keys(rows[0] ?? {});
+      matrix[headerRowIndex]?.map(String) ?? Object.keys(rows[0] ?? {});
     return { rows, headers: headers.map(String), sheetName };
   });
 }
@@ -1902,9 +2123,11 @@ export function StockClaimApp() {
     jenisKlaim: "",
     noKlaim: "",
     noFakturPajak: "",
+    namaCustomer: "",
     tanggalFakturPajak: "",
     dpp: 0,
     ppn: 0,
+    total: 0,
     status: "Draft",
     keterangan: "",
     attachment: "",
@@ -1918,23 +2141,30 @@ export function StockClaimApp() {
   useEffect(() => {
     const storedDb = readStoredJson<DbState | null>(DB_KEY, null);
     if (storedDb) {
+      const baseDb = seedDb();
       setDb({
-        ...seedDb(),
+        ...baseDb,
         ...storedDb,
         users: normalizeDefaultUsers(storedDb.users),
+        masterJenisKlaim: normalizeDefaultClaimTypes(storedDb.masterJenisKlaim),
+        monitoringKlaim: normalizeClaimRows(
+          storedDb.monitoringKlaim ?? baseDb.monitoringKlaim,
+        ),
       });
     }
 
     const storedSession = readStoredJson<SessionUser | null>(SESSION_KEY, null);
-    const activeSessions = getActiveSessions();
-    if (activeSessions.admin) {
-      delete activeSessions.admin;
-      setActiveSessions(activeSessions);
-    }
+    const activeSessions = getActiveSessions(storedSession);
+    setActiveSessions(activeSessions);
+    const storedSessionKey = storedSession
+      ? sessionStorageKey(storedSession.username)
+      : "";
     if (
       storedSession &&
-      activeSessions[storedSession.username] === storedSession.token
+      (!activeSessions[storedSessionKey] ||
+        activeSessions[storedSessionKey]?.token === storedSession.token)
     ) {
+      touchActiveSession(storedSession);
       setSession(storedSession);
     } else {
       localStorage.removeItem(SESSION_KEY);
@@ -1958,6 +2188,23 @@ export function StockClaimApp() {
       localStorage.setItem("stok-klaim-theme", theme);
     }
   }, [theme, loaded]);
+
+  useEffect(() => {
+    if (!loaded || !session) {
+      return;
+    }
+    touchActiveSession(session);
+    const timer = window.setInterval(
+      () => touchActiveSession(session),
+      ACTIVE_SESSION_HEARTBEAT_MS,
+    );
+    const release = () => releaseActiveSession(session);
+    window.addEventListener("beforeunload", release);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("beforeunload", release);
+    };
+  }, [loaded, session]);
 
   useEffect(() => {
     setMasterForm(masterConfigs[activeMaster].empty);
@@ -2052,6 +2299,7 @@ export function StockClaimApp() {
             [
               row.noKlaim,
               row.noFakturPajak,
+              row.namaCustomer,
               row.divisi,
               row.yangMengajukan,
               row.jenisKlaim,
@@ -2331,6 +2579,7 @@ export function StockClaimApp() {
     { key: "jenisKlaim", label: "JENIS" },
     { key: "noKlaim", label: "NO KLAIM" },
     { key: "noFakturPajak", label: "NO FP" },
+    { key: "namaCustomer", label: "NAMA CUSTOMER" },
     {
       key: "dpp",
       label: "DPP",
@@ -2344,6 +2593,13 @@ export function StockClaimApp() {
       align: "right",
       render: (row) => formatMoney(row.ppn),
       exportValue: (row) => row.ppn,
+    },
+    {
+      key: "total",
+      label: "TOTAL",
+      align: "right",
+      render: (row) => formatMoney(row.total || row.dpp + row.ppn),
+      exportValue: (row) => row.total || row.dpp + row.ppn,
     },
     {
       key: "status",
@@ -2393,12 +2649,20 @@ export function StockClaimApp() {
       return;
     }
     const active = getActiveSessions();
-    if (active[user.username]) {
-      setLoginError("Username ini masih aktif di device lain. Logout dulu atau reset sesi dari admin.");
+    const key = sessionStorageKey(user.username);
+    if (active[key]) {
+      setActiveSessions(active);
+      setLoginError(
+        "Akun ini masih aktif di Stok dan Klaim. Logout dulu dari sesi aktif, atau tunggu maksimal 2 menit setelah browser ditutup.",
+      );
       return;
     }
     const token = createId("session");
-    active[user.username] = token;
+    active[key] = {
+      token,
+      touchedAt: Date.now(),
+      app: APP_SESSION_SCOPE,
+    };
     setActiveSessions(active);
     const nextSession: SessionUser = {
       id: user.id,
@@ -2415,11 +2679,7 @@ export function StockClaimApp() {
 
   function logout() {
     if (session) {
-      const active = getActiveSessions();
-      if (active[session.username] === session.token) {
-        delete active[session.username];
-        setActiveSessions(active);
-      }
+      releaseActiveSession(session);
     }
     localStorage.removeItem(SESSION_KEY);
     setSession(null);
@@ -2437,6 +2697,9 @@ export function StockClaimApp() {
     const definition = uploadDefinitions[type];
     const rows = [definition.requiredHeaders, definition.sample];
     const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    if (type === "klaim") {
+      worksheet["L2"] = { t: "n", f: "J2+K2" };
+    }
     worksheet["!cols"] = definition.requiredHeaders.map((header) => ({
       wch: Math.max(14, header.length + 4),
     }));
@@ -2458,9 +2721,9 @@ export function StockClaimApp() {
     const batchId = createId("batch");
     setUploadStatus(`Membaca ${file.name}...`);
     try {
-      const parsed = await parseSheet(file);
+      const parsed = await parseSheet(file, definition);
       const missing = definition.requiredHeaders.filter(
-        (header) => !hasHeader(parsed.headers, header),
+        (header) => !hasHeader(parsed.headers, header, definition.headerAliases),
       );
       if (missing.length) {
         throw new Error(`Kolom wajib belum ada: ${missing.join(", ")}`);
@@ -2732,6 +2995,19 @@ export function StockClaimApp() {
     });
   }
 
+  function handleClaimAttachmentFiles(files: FileList | null) {
+    const names = Array.from(files ?? [])
+      .map((file) => file.name)
+      .filter(Boolean);
+    if (!names.length) {
+      return;
+    }
+    setClaimForm((current) => ({
+      ...current,
+      attachment: names.join(", "),
+    }));
+  }
+
   function saveClaim() {
     if (!canEdit) {
       return;
@@ -2748,19 +3024,24 @@ export function StockClaimApp() {
       setClaimError("No Klaim sudah ada. Data tidak disimpan dobel.");
       return;
     }
+    const claimPayload = {
+      ...claimForm,
+      jenisKlaim: normalizeClaimTypeName(claimForm.jenisKlaim),
+      total: claimForm.total || claimForm.dpp + claimForm.ppn,
+    };
     setDb((current) => ({
       ...current,
       monitoringKlaim: editingClaimId
         ? current.monitoringKlaim.map((row) =>
-            row.id === editingClaimId ? { ...row, ...claimForm } : row,
+            row.id === editingClaimId ? { ...row, ...claimPayload } : row,
           )
-        : [{ id: createId("klaim"), ...claimForm }, ...current.monitoringKlaim],
+        : [{ id: createId("klaim"), ...claimPayload }, ...current.monitoringKlaim],
       auditLogs: [
         makeAudit(
           session?.username ?? "system",
           editingClaimId ? "edit" : "create",
           "monitoring klaim",
-          claimForm.noKlaim,
+          claimPayload.noKlaim,
         ),
         ...current.auditLogs,
       ],
@@ -2772,9 +3053,11 @@ export function StockClaimApp() {
       jenisKlaim: "",
       noKlaim: "",
       noFakturPajak: "",
+      namaCustomer: "",
       tanggalFakturPajak: "",
       dpp: 0,
       ppn: 0,
+      total: 0,
       status: "Draft",
       keterangan: "",
       attachment: "",
@@ -2791,9 +3074,11 @@ export function StockClaimApp() {
       jenisKlaim: row.jenisKlaim,
       noKlaim: row.noKlaim,
       noFakturPajak: row.noFakturPajak,
+      namaCustomer: row.namaCustomer,
       tanggalFakturPajak: row.tanggalFakturPajak,
       dpp: row.dpp,
       ppn: row.ppn,
+      total: row.total || row.dpp + row.ppn,
       status: row.status,
       keterangan: row.keterangan,
       attachment: row.attachment,
@@ -2812,9 +3097,11 @@ export function StockClaimApp() {
     }
     setClaimForm((current) => ({
       ...current,
+      namaCustomer: rekap.namaPt || current.namaCustomer,
       tanggalFakturPajak: rekap.tglFp,
       dpp: rekap.dpp,
       ppn: Math.round(rekap.dpp * 0.11),
+      total: rekap.dpp + Math.round(rekap.dpp * 0.11),
     }));
     setClaimError("");
   }
@@ -2837,11 +3124,17 @@ export function StockClaimApp() {
     if (!isAdmin) {
       return;
     }
-    const next: Record<string, string> = {};
-    if (session) {
-      next[session.username] = session.token;
-    }
-    setActiveSessions(next);
+    setActiveSessions(
+      session
+        ? {
+            [sessionStorageKey(session.username)]: {
+              token: session.token,
+              touchedAt: Date.now(),
+              app: APP_SESSION_SCOPE,
+            },
+          }
+        : {},
+    );
     addAudit("reset", "active sessions", "Admin cleared stale login sessions.");
   }
 
@@ -3534,6 +3827,18 @@ export function StockClaimApp() {
   function renderKlaim() {
     const totalDpp = filteredKlaim.reduce((sum, row) => sum + row.dpp, 0);
     const totalPpn = filteredKlaim.reduce((sum, row) => sum + row.ppn, 0);
+    const totalKlaim = filteredKlaim.reduce(
+      (sum, row) => sum + (row.total || row.dpp + row.ppn),
+      0,
+    );
+    const claimTypeOptions = db.masterJenisKlaim
+      .filter((row) => row.status === "aktif")
+      .map((row) => row.jenisKlaim);
+    const claimTypeSelectValue =
+      claimForm.jenisKlaim &&
+      !claimTypeOptions.includes(claimForm.jenisKlaim)
+        ? "Lainnya"
+        : claimForm.jenisKlaim;
     return (
       <>
         {renderFilters()}
@@ -3543,6 +3848,7 @@ export function StockClaimApp() {
             <div className="summary-strip compact">
               <Badge tone="info">DPP {formatMoney(totalDpp)}</Badge>
               <Badge tone="info">PPN {formatMoney(totalPpn)}</Badge>
+              <Badge tone="success">Total {formatMoney(totalKlaim)}</Badge>
             </div>
           </div>
           <div className="inline-form claim-form">
@@ -3586,7 +3892,7 @@ export function StockClaimApp() {
             <label>
               Jenis Klaim
               <select
-                value={claimForm.jenisKlaim}
+                value={claimTypeSelectValue}
                 onChange={(event) =>
                   setClaimForm((current) => ({
                     ...current,
@@ -3596,15 +3902,29 @@ export function StockClaimApp() {
                 disabled={!canEdit}
               >
                 <option value="">Pilih</option>
-                {db.masterJenisKlaim
-                  .filter((row) => row.status === "aktif")
-                  .map((row) => (
-                    <option key={row.id} value={row.jenisKlaim}>
-                      {row.jenisKlaim}
-                    </option>
-                  ))}
+                {claimTypeOptions.map((jenisKlaim) => (
+                  <option key={jenisKlaim} value={jenisKlaim}>
+                    {jenisKlaim}
+                  </option>
+                ))}
               </select>
             </label>
+            {claimTypeSelectValue === "Lainnya" ? (
+              <label>
+                Jenis Lainnya
+                <input
+                  value={claimForm.jenisKlaim === "Lainnya" ? "" : claimForm.jenisKlaim}
+                  onChange={(event) =>
+                    setClaimForm((current) => ({
+                      ...current,
+                      jenisKlaim: event.target.value || "Lainnya",
+                    }))
+                  }
+                  placeholder="Ketik jenis klaim"
+                  disabled={!canEdit}
+                />
+              </label>
+            ) : null}
             <label>
               No Klaim
               <input
@@ -3626,6 +3946,19 @@ export function StockClaimApp() {
                   setClaimForm((current) => ({
                     ...current,
                     noFakturPajak: normalizeExcelText(event.target.value),
+                  }))
+                }
+                disabled={!canEdit}
+              />
+            </label>
+            <label>
+              Nama Customer
+              <input
+                value={claimForm.namaCustomer}
+                onChange={(event) =>
+                  setClaimForm((current) => ({
+                    ...current,
+                    namaCustomer: event.target.value,
                   }))
                 }
                 disabled={!canEdit}
@@ -3659,10 +3992,14 @@ export function StockClaimApp() {
               <input
                 value={claimForm.dpp}
                 onChange={(event) =>
-                  setClaimForm((current) => ({
-                    ...current,
-                    dpp: parseAmount(event.target.value),
-                  }))
+                  setClaimForm((current) => {
+                    const dpp = parseAmount(event.target.value);
+                    return {
+                      ...current,
+                      dpp,
+                      total: dpp + current.ppn,
+                    };
+                  })
                 }
                 disabled={!canEdit}
               />
@@ -3672,13 +4009,21 @@ export function StockClaimApp() {
               <input
                 value={claimForm.ppn}
                 onChange={(event) =>
-                  setClaimForm((current) => ({
-                    ...current,
-                    ppn: parseAmount(event.target.value),
-                  }))
+                  setClaimForm((current) => {
+                    const ppn = parseAmount(event.target.value);
+                    return {
+                      ...current,
+                      ppn,
+                      total: current.dpp + ppn,
+                    };
+                  })
                 }
                 disabled={!canEdit}
               />
+            </label>
+            <label>
+              Total
+              <input value={formatMoney(claimForm.total || claimForm.dpp + claimForm.ppn)} readOnly />
             </label>
             <label>
               Status
@@ -3699,16 +4044,17 @@ export function StockClaimApp() {
                 ))}
               </select>
             </label>
-            <label>
+            <label className="wide-field attachment-picker-field">
               Attachment
+              <span className="attachment-picker-box">
+                <UploadCloud size={14} />
+                {claimForm.attachment || "Klik untuk pilih beberapa dokumen"}
+              </span>
               <input
-                value={claimForm.attachment}
-                onChange={(event) =>
-                  setClaimForm((current) => ({
-                    ...current,
-                    attachment: event.target.value,
-                  }))
-                }
+                type="file"
+                multiple
+                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx,.csv"
+                onChange={(event) => handleClaimAttachmentFiles(event.target.files)}
                 disabled={!canEdit}
               />
             </label>

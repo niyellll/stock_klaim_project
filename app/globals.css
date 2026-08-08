@@ -501,6 +501,41 @@ select:focus {
   width: 1px;
 }
 
+.attachment-picker-field {
+  cursor: pointer;
+  position: relative;
+}
+
+.attachment-picker-field input[type="file"] {
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
+}
+
+.attachment-picker-box {
+  align-items: center;
+  background: var(--panel);
+  border: 1px dashed rgba(11, 99, 206, 0.35);
+  border-radius: 6px;
+  color: var(--text);
+  display: inline-flex;
+  gap: 8px;
+  min-height: 34px;
+  overflow: hidden;
+  padding: 7px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-picker-field:hover .attachment-picker-box,
+.attachment-picker-field:focus-within .attachment-picker-box {
+  border-color: var(--bbm-blue-2);
+  box-shadow: 0 0 0 3px rgba(11, 99, 206, 0.16);
+  color: var(--bbm-blue-2);
+}
+
 .badge {
   align-items: center;
   border: 1px solid transparent;

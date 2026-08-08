@@ -245,9 +245,11 @@ export const monitoringKlaim = sqliteTable(
     jenisKlaim: text("jenis_klaim").notNull(),
     noKlaim: text("no_klaim").notNull(),
     noFakturPajak: text("no_faktur_pajak").notNull().default(""),
+    namaCustomer: text("nama_customer").notNull().default(""),
     tanggalFakturPajak: text("tanggal_faktur_pajak").notNull().default(""),
     dpp: real("dpp").notNull().default(0),
     ppn: real("ppn").notNull().default(0),
+    total: real("total").notNull().default(0),
     status: text("status", {
       enum: ["Draft", "Diajukan", "Diproses", "Selesai", "Ditolak"],
     })
